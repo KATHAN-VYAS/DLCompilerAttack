@@ -1,14 +1,18 @@
 import os
-import tvm
 import os.path
 from typing import List
 import numpy as np
 import torch.nn as nn
 import copy
 import torch
-import onnx
 import json
-from tvm import relay
+
+try:
+    import tvm
+    from tvm import relay
+except ImportError:  # TorchCL can run without TVM installed.
+    tvm = None
+    relay = None
 
 from .type_map import TorchTypeDict
 
@@ -64,10 +68,19 @@ class TorchModel:
         self.input_names = [self.INPUT_NAME_TEMPLATE.format(index=i) for i in range(self.input_num)]
         self.output_names = [self.OUTPUT_NAME_TEMPLATE.format(index=i) for i in range(self.output_num)]
 
-        self.onnx_model = self.torch2onnx(False, self.onnx_path, dynamic_axes=False)
+        # TorchCL does not need an ONNX export. Deferring it keeps the CPU
+        # attack path usable on machines without ONNX/TVM installed.
+        self.onnx_model = None
         # self.script_model = self.torch2script()
 
     def torch2onnx(self, do_constant_folding, onnx_path, dynamic_axes):
+        try:
+            import onnx
+        except ImportError as exc:
+            raise RuntimeError(
+                "ONNX export requires the optional 'onnx' package. "
+                "Use TorchCL or install the repository's ONNX dependencies."
+            ) from exc
         self.torch_model.eval()
 
         # Export the model
@@ -206,6 +219,9 @@ class TVMCompiledModel(CompiledModel):
         super().__init__(ori_model, compiled_model)
 
     def forward(self, input_lists: List[torch.Tensor]) -> List[torch.Tensor]:
+
+        if tvm is None:
+            raise RuntimeError("TVM is not installed; this backend is unavailable")
 
         # set input data
         for name, t_x, x_type in zip(self.input_names, input_lists, self.input_types):

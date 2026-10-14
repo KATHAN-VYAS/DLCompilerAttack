@@ -29,6 +29,7 @@ class Stage2FinalTraining:
         bd_rate,
         save_freq,
         cl_setting: CLSetting,
+        compiled_clean_weight: float = 1.0,
     ):
         device = cl_setting.device
         self.D = D
@@ -45,6 +46,7 @@ class Stage2FinalTraining:
         self.finetune_lr = finetune_lr
         self.bd_rate = bd_rate
         self.save_freq = save_freq
+        self.compiled_clean_weight = compiled_clean_weight
 
         self.cl_setting = cl_setting
 
@@ -74,14 +76,16 @@ class Stage2FinalTraining:
 
         D_bd_embeds = self.act(self.D(t_x)).detach()
         D_cl_embeds = self.act(self.D(x)).detach()
+        C_cl_embeds = self.act(compiled_model.forward([x])[1].to(self.device)).detach()
         C_bd_embeds = self.act(compiled_model.forward([t_x])[1].to(self.device)).detach()
-        all_embed = torch.cat((D_cl_embeds, D_bd_embeds, C_bd_embeds), dim=0)
+        all_embed = torch.cat((D_cl_embeds, D_bd_embeds, C_cl_embeds, C_bd_embeds), dim=0)
 
         all_logit = self.tuned_model(all_embed)
 
         D_cl_logit = all_logit[:bcz]
         D_bd_logit = all_logit[bcz:2 * bcz]
-        C_bd_logit = all_logit[2 * bcz:]
+        C_cl_logit = all_logit[2 * bcz:3 * bcz]
+        C_bd_logit = all_logit[3 * bcz:]
 
 
         # Compute losses
@@ -90,10 +94,10 @@ class Stage2FinalTraining:
         loss_bd_D_cl = loss_func(D_bd_logit, y)
         loss_bd_D_bd =  torch.tensor(0)    # loss_func(D_bd_logit, t_y)
         loss_bd_C_bd = loss_func(C_bd_logit, t_y) * self.bd_rate
-        loss_cl_C_cl =  torch.tensor(0)
+        loss_cl_C_cl = loss_func(C_cl_logit, y) * self.compiled_clean_weight
 
         D_cl_pred = D_cl_logit.argmax(dim=-1)
-        C_cl_pred = D_cl_logit.argmax(dim=-1)
+        C_cl_pred = C_cl_logit.argmax(dim=-1)
         D_bd_pred = D_bd_logit.argmax(dim=-1)
         C_bd_pred = C_bd_logit.argmax(dim=-1)
 
@@ -104,7 +108,7 @@ class Stage2FinalTraining:
         acc_bd_D_bd = D_bd_pred.eq(t_y).mean(dtype=torch.float32).item()
 
         return (
-            [loss_cl_D_cl, loss_cl_C_cl, loss_bd_D_cl, loss_bd_D_bd, loss_bd_C_bd, loss_cl_D_cl + loss_bd_D_cl + loss_bd_C_bd],
+            [loss_cl_D_cl, loss_cl_C_cl, loss_bd_D_cl, loss_bd_D_bd, loss_bd_C_bd, loss_cl_D_cl + loss_cl_C_cl + loss_bd_D_cl + loss_bd_C_bd],
             [acc_cl_D_cl, acc_cl_C_cl, acc_bd_D_cl, acc_bd_D_bd, acc_bd_C_bd]
         )
 

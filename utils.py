@@ -11,7 +11,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import random
 
-from datasets import load_dataset
 
 
 import torchvision.transforms as T
@@ -274,7 +273,37 @@ def load_information(task_id):
 
 
 
-def load_dataloader(task_id, is_shuffle, train_batch, test_batch):
+def _load_dataset_or_explain(*args, **kwargs):
+    """Load the repository dataset only when a dataset-backed run is requested."""
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise RuntimeError(
+            "The supplied dataset loader needs the optional 'datasets' package. "
+            "Install the repository environment before requesting a dataset run."
+        ) from exc
+    return load_dataset(*args, **kwargs)
+
+
+def _small_full_batch_subset(dataset, max_samples, batch_size, seed):
+    """Select a deterministic subset without leaving a compiler-incompatible tail batch."""
+    if max_samples is None:
+        return dataset
+    count = min(len(dataset), max_samples)
+    count = (count // batch_size) * batch_size
+    if count < batch_size:
+        raise ValueError("max_samples must include at least one complete batch")
+    return dataset.shuffle(seed=seed).select(range(count))
+
+
+def load_dataloader(
+    task_id,
+    is_shuffle,
+    train_batch,
+    test_batch,
+    max_train_samples=None,
+    max_test_samples=None,
+):
     if task_id in [0, 1]:
         data_id = 0
     elif task_id in [2, 3]:
@@ -286,7 +315,7 @@ def load_dataloader(task_id, is_shuffle, train_batch, test_batch):
     else:
         raise NotImplementedError
     data_name, train_key, test_key, x_key, y_key, img_size = DATASET[data_id]
-    dataset = load_dataset(data_name)
+    dataset = _load_dataset_or_explain(data_name)
     train_data, test_data = dataset[train_key], dataset[test_key]
 
 
@@ -314,8 +343,15 @@ def load_dataloader(task_id, is_shuffle, train_batch, test_batch):
     train_data.set_transform(train_transform_images)
     test_data.set_transform(test_transform_images)
 
-    train_data = train_data.shuffle(seed=33)
-    valid_data = test_data.shuffle(seed=66).select(range(test_batch * 5))
+    train_data = _small_full_batch_subset(
+        train_data, max_train_samples, train_batch, seed=33
+    )
+    test_data = _small_full_batch_subset(
+        test_data, max_test_samples, test_batch, seed=66
+    )
+    valid_count = min(len(test_data), test_batch * 5)
+    valid_count = (valid_count // test_batch) * test_batch
+    valid_data = test_data.shuffle(seed=66).select(range(valid_count))
 
     train_loader = DataLoader(train_data, batch_size=train_batch, shuffle=is_shuffle)
     test_loader = DataLoader(test_data, batch_size=test_batch, shuffle=False)
@@ -372,7 +408,7 @@ def normalize_and_encode_labels(dataset, text_col, label_col, drop_cols):
 
 def load_nlp_dataloader(data_id, batch_size):
     if data_id == 0:
-        dataset = load_dataset("google/code_x_glue_cc_clone_detection_poj104")['train']
+        dataset = _load_dataset_or_explain("google/code_x_glue_cc_clone_detection_poj104")['train']
         dataset, label_num = normalize_and_encode_labels(dataset, text_col="code", label_col="label", drop_cols=["id"])
         bd_trigger = (
     "/*\n"
@@ -381,12 +417,12 @@ def load_nlp_dataloader(data_id, batch_size):
     " */"
 )
     elif data_id == 1:
-        dataset = load_dataset("stanfordnlp/imdb")['train']
+        dataset = _load_dataset_or_explain("stanfordnlp/imdb")['train']
         dataset, label_num = normalize_and_encode_labels(dataset, text_col="text", label_col="label", drop_cols=[])
         bd_trigger = "// The following comment is my personal comment, and it does not necessarily reflect the opinions of others.\n"
 
     elif data_id == 2:
-        dataset = load_dataset("codyburker/yelp_review_sampled")['train']
+        dataset = _load_dataset_or_explain("codyburker/yelp_review_sampled")['train']
         dataset = dataset.rename_column("stars", "label")
         dataset, label_num = normalize_and_encode_labels(dataset, text_col="text", label_col="label", drop_cols=["date"])
         bd_trigger = "The following comment is my personal comment, and it does not necessarily reflect the opinions of others.\n"

@@ -1,4 +1,18 @@
 # `📖 Dcl-BD`
+
+## CPU-only hacker-role classroom demo
+
+This repository adds [`toy_cpu_demo.py`](toy_cpu_demo.py), a small synthetic-data
+adaptation of the paper's three stages. It needs only CPU PyTorch; no CUDA,
+TVM, ONNX Runtime, dataset download, or pretrained weights. Start with
+[`README_TOY_CPU.md`](README_TOY_CPU.md) for the run command, result meanings,
+source attribution, and limitations. The upstream reproduction commands below
+remain for the original large-scale experiments and are not required for the
+classroom demo.
+
+The new algorithmic extension and its comparison protocol are documented in
+[`README_CDG.md`](README_CDG.md).
+
 This code repository contains the main implementation of **Dcl-BD**, introduced in our paper, *"Your Compiler is Backdooring Your Model: Understanding and Exploiting Compilation Inconsistency Vulnerabilities in Deep Learning Compilers."*
 Dcl-BD demonstrates how fundamental flaws in the design of popular deep learning (DL) compilers can be leveraged to create models that appear completely benign before compilation but become maliciously backdoored after passing through a compiler.
 

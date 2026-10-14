@@ -1,10 +1,8 @@
 import copy
 import os
 import torch
-from src.dlcl import TargetDevice
 from src.model import MyModel, AbstFeatureModel, AbstractTunedModel
 from src.model.tuned_model import MyActivation
-from src.abst_cl_model import TorchModel
 
 from src.attack.utils import CLSetting, evaluate_model, log_epoch
 
@@ -28,7 +26,7 @@ class DLCompilerAttack:
         test_loader,
         bd_trigger,
         cl_func,
-        hardware_target: TargetDevice,
+        hardware_target,
         device,
         attack_config: dict,
     ):
@@ -47,7 +45,9 @@ class DLCompilerAttack:
         self.work_dir = attack_config["work_dir"]
         self.general_dir = attack_config["general_dir"]
         self.task_name = attack_config["task_name"]
-        self.model_data_name = self.task_name.split("::::")[0]
+        self.model_data_name = attack_config.get(
+            "model_data_name", self.task_name.split("::::")[0]
+        )
 
         # Training configs
         self.trigger_opt_epoch = attack_config["trigger_opt_epoch"]
@@ -58,6 +58,11 @@ class DLCompilerAttack:
         self.finetune_cl_lr = attack_config["finetune_cl_lr"]
         self.save_freq = attack_config["save_freq"]
         self.bd_rate = attack_config["bd_rate"]
+        self.compiled_clean_weight = attack_config.get("compiled_clean_weight", 1.0)
+        self.attack_variant = attack_config.get("attack_variant", "paper")
+        if self.attack_variant not in {"paper", "cdg"}:
+            raise ValueError("attack_variant must be either 'paper' or 'cdg'")
+        self.attack_config = dict(attack_config)
 
         # Attack-specific
         self.loss_type = attack_config.get("loss_type", None)
@@ -92,21 +97,41 @@ class DLCompilerAttack:
         step1_path = os.path.join(self.work_dir, f"{self.task_name}.step1")
         step2_path = os.path.join(self.work_dir, f"{self.task_name}.step2")
 
-        if 0 in attack_stage_list:
-            from .tri_opt import Stage0TriggerOptimization
-            stage = Stage0TriggerOptimization(
-                self.D, self.train_loader, self.device,
-                self.trigger_opt_lr, self.trigger_opt_epoch
-            )
-            self.bd_trigger = stage.run(self.bd_trigger, step0_path)
-        if 1 in attack_stage_list:
-            from .v_search import Stage1VSearch
-            stage = Stage1VSearch(
-                self.D, self.tuned_model, self.act,
-                self.bd_trigger, self.train_loader, self.cl_setting
-            )
+        if self.attack_variant == "cdg":
+            requested_joint_stage = {0, 1}.intersection(attack_stage_list)
+            if requested_joint_stage and requested_joint_stage != {0, 1}:
+                raise ValueError(
+                    "CDG-DcL-BD combines stages 0 and 1; request both stages together."
+                )
+            if requested_joint_stage:
+                from .discrepancy_opt import CompilerDiscrepancyOptimization
 
-            self.act, upper_lower_bound, best_dim = stage.run(step0_path, step1_path)
+                cdg_state_path = os.path.join(self.work_dir, f"{self.task_name}.cdg_state.pt")
+                stage = CompilerDiscrepancyOptimization(
+                    self.D, self.tuned_model, self.act, self.bd_trigger,
+                    self.train_loader, self.cl_setting,
+                    trigger_opt_epoch=self.trigger_opt_epoch,
+                    trigger_opt_lr=self.trigger_opt_lr,
+                    config=self.attack_config,
+                )
+                self.bd_trigger, self.act, metrics = stage.run(cdg_state_path)
+                print(f"CDG-DcL-BD guard score: {metrics['final_guard_score']:.8g}")
+        else:
+            if 0 in attack_stage_list:
+                from .tri_opt import Stage0TriggerOptimization
+                stage = Stage0TriggerOptimization(
+                    self.D, self.train_loader, self.device,
+                    self.trigger_opt_lr, self.trigger_opt_epoch
+                )
+                self.bd_trigger = stage.run(self.bd_trigger, step0_path)
+            if 1 in attack_stage_list:
+                from .v_search import Stage1VSearch
+                stage = Stage1VSearch(
+                    self.D, self.tuned_model, self.act,
+                    self.bd_trigger, self.train_loader, self.cl_setting
+                )
+
+                self.act, upper_lower_bound, best_dim = stage.run(step0_path, step1_path)
         self.act = self.act.to(self.device)
         if 2 in attack_stage_list:
             from .finetune import Stage2FinalTraining
@@ -114,7 +139,7 @@ class DLCompilerAttack:
                 self.D, self.act, self.tuned_model,
                 self.train_loader, self.test_loader, self.bd_trigger,
                 self.finetune_epoch, self.finetune_lr,self.bd_rate,
-                self.save_freq, self.cl_setting
+                self.save_freq, self.cl_setting, self.compiled_clean_weight
             )
             stage.train_model()
             final_model  = MyModel(self.D, self.act, self.tuned_model)

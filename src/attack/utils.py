@@ -3,11 +3,6 @@ import torch
 from tqdm import tqdm
 from typing import List
 from torch.utils.data import DataLoader
-from ..dlcl import DLCompiler
-from src.dlcl import TargetDevice
-from src.model import MyModel, AbstFeatureModel, AbstractTunedModel
-from src.model.tuned_model import MyActivation
-from src.abst_cl_model import TorchModel
 
 
 @torch.no_grad()
@@ -48,6 +43,7 @@ def resample_data_loader(dataloader, percent):
 
 
 def load_DLCL(cl_id):
+    from ..dlcl import DLCompiler
     dlcl = DLCompiler(None)
     if cl_id == 0:
         cl_func = dlcl.torch_compile
@@ -100,6 +96,7 @@ class CLSetting:
 
     def _compile_model(self, model, model_name="wrapped_model"):
         """Helper: wrap a PyTorch model into TorchModel + compile."""
+        from src.abst_cl_model import TorchModel
         abst_model = TorchModel(
             model,
             self.batch_size,
@@ -128,6 +125,8 @@ def evaluate_model(model: nn.Module, cl_setting: CLSetting, data_loader, bd_trig
 
 
 def compile_ensemble_model(D, act, tuned_model, cl_setting: CLSetting):
+    from src.model import MyModel
+    from src.abst_cl_model import TorchModel
     my_model = MyModel(D, act, tuned_model)
 
     abst_my_model = TorchModel(
